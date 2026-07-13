@@ -82,6 +82,21 @@ def parse_args() -> argparse.Namespace:
         help="Variante SFT a evaluar.",
     )
     parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        default=DATASET_ROOT,
+        help="Carpeta raíz con las variantes de publicación (modo local).",
+    )
+    parser.add_argument(
+        "--dataset-hf-id",
+        default=None,
+        help=(
+            "ID de Hugging Face del dataset (ej: iue-edu/MaternaCare-ES). "
+            "Si se proporciona, carga desde HF usando la variante como subset. "
+            "Si no, usa --dataset-root en modo local."
+        ),
+    )
+    parser.add_argument(
         "--output-prefix",
         type=Path,
         required=True,
@@ -234,18 +249,26 @@ def extract_question(messages: list[dict[str, str]]) -> str:
 
 
 def load_test_examples(
-    dataset_variant: str, limit: int | None = None
+    dataset_variant: str,
+    dataset_root: Path = DATASET_ROOT,
+    dataset_hf_id: str | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    test_file = DATASET_ROOT / dataset_variant / "test.jsonl"
-    if not test_file.exists():
-        raise FileNotFoundError(f"No se encontro test.jsonl en {test_file}")
-
-    examples = []
-    with open(test_file, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                examples.append(json.loads(line))
+    if dataset_hf_id:
+        remove_project_root_from_imports()
+        from datasets import load_dataset
+        dataset = load_dataset(dataset_hf_id, dataset_variant)
+        examples = list(dataset["test"])
+    else:
+        test_file = dataset_root / dataset_variant / "test.jsonl"
+        if not test_file.exists():
+            raise FileNotFoundError(f"No se encontro test.jsonl en {test_file}")
+        examples = []
+        with open(test_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    examples.append(json.loads(line))
     if limit:
         examples = examples[:limit]
     return examples
@@ -382,7 +405,12 @@ def main() -> None:
     model, tokenizer, base_model = load_model_and_tokenizer(
         args.adapter_dir, args, stack
     )
-    examples = load_test_examples(args.dataset_variant, args.limit)
+    examples = load_test_examples(
+        args.dataset_variant,
+        dataset_root=args.dataset_root,
+        dataset_hf_id=args.dataset_hf_id,
+        limit=args.limit,
+    )
     print(f"Ejemplos cargados: {len(examples)}")
 
     output_file = Path(str(args.output_prefix) + "_predictions.jsonl")

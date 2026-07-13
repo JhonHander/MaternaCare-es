@@ -116,7 +116,16 @@ def parse_args() -> argparse.Namespace:
         "--dataset-root",
         type=Path,
         default=DATASET_ROOT,
-        help="Carpeta raíz con las variantes de publicación.",
+        help="Carpeta raíz con las variantes de publicación (modo local).",
+    )
+    parser.add_argument(
+        "--dataset-hf-id",
+        default=None,
+        help=(
+            "ID de Hugging Face del dataset (ej: iue-edu/MaternaCare-ES). "
+            "Si se proporciona, carga desde HF usando la variante como subset. "
+            "Si no, usa --dataset-root en modo local."
+        ),
     )
     parser.add_argument(
         "--dataset-variant",
@@ -282,11 +291,14 @@ def maybe_limit(dataset: Any, limit: int | None) -> Any:
 
 
 def load_sft_datasets(args: argparse.Namespace, load_dataset: Any) -> tuple[Any, Any, Any]:
-    """Load train, validation, and held-out test splits from local JSONL files."""
-    dataset = load_dataset(
-        "json",
-        data_files=dataset_files(args.dataset_root, args.dataset_variant),
-    )
+    """Load train, validation, and held-out test splits from HF or local JSONL files."""
+    if args.dataset_hf_id:
+        dataset = load_dataset(args.dataset_hf_id, args.dataset_variant)
+    else:
+        dataset = load_dataset(
+            "json",
+            data_files=dataset_files(args.dataset_root, args.dataset_variant),
+        )
     train_dataset = to_prompt_completion(maybe_limit(dataset["train"], args.train_limit))
     eval_dataset = to_prompt_completion(maybe_limit(dataset["validation"], args.eval_limit))
     test_dataset = to_prompt_completion(dataset["test"])
