@@ -95,14 +95,11 @@ async def run_matrix(
     args = parser.parse_args(base_args + ["--model", "gemma4_base"])
     base_config = config_from_args(args)
 
-    if specific_model and specific_strategy:
-        cfgs = [(specific_model, specific_strategy, base_config)]
-    elif specific_model:
-        cfgs = [(specific_model, s, base_config) for s in STRATEGIES]
-    elif specific_strategy:
-        cfgs = [(m, specific_strategy, base_config) for m in MODELS]
-    else:
-        cfgs = _build_matrix_configs(base_config, limit)
+    cfgs = _build_matrix_configs(base_config, limit)
+    if specific_model:
+        cfgs = [item for item in cfgs if item[0] == specific_model]
+    if specific_strategy:
+        cfgs = [item for item in cfgs if item[1] == specific_strategy]
 
     results: list[ExperimentResult] = []
     total = len(cfgs)
