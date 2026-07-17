@@ -74,6 +74,35 @@ Cada modelo ejecuta las tres estrategias sobre las 328 preguntas:
 - `hybrid`: recuperación BM25 + búsqueda semántica.
 - `hyde`: genera un documento hipotético y recupera evidencia real mediante búsqueda semántica.
 
+## Monitorear la ejecución
+
+Los comandos anteriores guardan toda la salida en `logs/<modelo>.log` y también la muestran en pantalla. Para observar el progreso desde otra terminal, ejecute:
+
+```bash
+tail -f logs/gemma4_base.log
+```
+
+Cambie el nombre por el modelo correspondiente. Los mensajes tienen el prefijo `[benchmark]` y muestran:
+
+- Carga del dataset, corpus, índice de recuperación, modelo y evaluador.
+- Preparación de HyDE, incluyendo documentos generados y aciertos de caché.
+- Número de muestra y `qa_id` actual.
+- Etapa actual: `retrieval`, `generation`, `evaluation` o `written`.
+- Chunks recuperados, tokens generados y latencia de cada etapa.
+- Errores por muestra y estado final de escritura.
+
+Ejemplo:
+
+```text
+[benchmark] sample 31/328 qa_id=... stage=retrieval
+[benchmark] sample 31/328 stage=retrieval_done chunks=8 latency=1.42s
+[benchmark] sample 31/328 stage=generation_done latency=10.31s output_tokens=84
+[benchmark] sample 31/328 stage=evaluation_done latency=7.85s
+[benchmark] sample 31/328 stage=written status=ok
+```
+
+Esto permite identificar si el proceso está trabajando en recuperación, generación local, evaluación RAGAS o escritura del resultado. Las preguntas, prompts y respuestas completas no se imprimen en los logs.
+
 ## Qué entregar al finalizar
 
 Entregue estos archivos:
