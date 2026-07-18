@@ -5,6 +5,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from transformers import AutoTokenizer
+
 from utils import (
     accepted_for_lm,
     assign_chunk_ids,
@@ -39,7 +41,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-report-output", type=Path, default=reports_dir / "build_report.json")
     parser.add_argument("--min-tokens", type=int, default=500)
     parser.add_argument("--max-tokens", type=int, default=1200)
-    parser.add_argument("--overlap-tokens", type=int, default=80)
+    parser.add_argument(
+        "--overlap-tokens",
+        type=int,
+        default=100,
+        help="Number of real tokenizer tokens to overlap between adjacent chunks.",
+    )
+    parser.add_argument(
+        "--tokenizer-name",
+        type=str,
+        default="google/gemma-4-E2B-it",
+        help="Hugging Face tokenizer name or path to use for overlap computation.",
+    )
     parser.add_argument("--min-accepted-tokens", type=int, default=180)
     parser.add_argument("--min-clinical-score", type=int, default=5)
     parser.add_argument("--validation-ratio", type=float, default=0.05)
@@ -118,6 +131,7 @@ def _dedupe_audit(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
 
 def main() -> None:
     args = parse_args()
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
     clean_rows = read_jsonl(args.input)
     kept_rows = [row for row in clean_rows if row.get("is_kept") is True]
     candidate_chunks = chunk_records(
@@ -125,6 +139,7 @@ def main() -> None:
         min_tokens=args.min_tokens,
         max_tokens=args.max_tokens,
         overlap_tokens=args.overlap_tokens,
+        tokenizer=tokenizer,
     )
 
     accepted: List[Dict[str, Any]] = []

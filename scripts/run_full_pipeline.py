@@ -37,7 +37,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-clinical-score", type=int, default=5)
     parser.add_argument("--min-tokens", type=int, default=500)
     parser.add_argument("--max-tokens", type=int, default=1200)
-    parser.add_argument("--overlap-tokens", type=int, default=80)
+    parser.add_argument(
+        "--overlap-tokens",
+        type=int,
+        default=100,
+        help="Number of real tokenizer tokens to overlap between adjacent chunks.",
+    )
+    parser.add_argument(
+        "--tokenizer-name",
+        type=str,
+        default="google/gemma-4-E2B-it",
+        help="Hugging Face tokenizer name or path to use for chunk overlap.",
+    )
     parser.add_argument("--samples-per-pdf", type=int, default=5)
     # Phase 7-8 optional steps
     parser.add_argument(
@@ -179,6 +190,8 @@ def main() -> None:
             str(args.max_tokens),
             "--overlap-tokens",
             str(args.overlap_tokens),
+            "--tokenizer-name",
+            str(args.tokenizer_name),
         ],
     )
     run_step(
