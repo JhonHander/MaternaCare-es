@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from .data import BenchmarkSample, CorpusChunk, DatasetMode, load_corpus, load_dataset, validate_reference_chunks
-from .generation import HYDE_INSTRUCTION, GenerationSettings, HuggingFaceGenerator, OpenAIHydeGenerator
+from .generation import (
+    ANSWER_WITH_CONTEXT_INSTRUCTION,
+    ANSWER_WITHOUT_CONTEXT_INSTRUCTION,
+    HYDE_INSTRUCTION,
+    GenerationSettings,
+    HuggingFaceGenerator,
+    OpenAIHydeGenerator,
+)
 from .hyde import HypotheticalRecord, prepare_hypothetical_documents
 from .metrics import METRIC_NAMES, RagasEvaluator
 from .model_registry import MODEL_REGISTRY, resolve_adapter_source
@@ -20,6 +27,10 @@ from .telemetry import combine_system_measurements
 
 
 Strategy = Literal["no_rag", "hybrid", "hyde"]
+
+
+def _log(message: str) -> None:
+    print(f"[benchmark] {message}", flush=True)
 
 
 @dataclass(frozen=True)
@@ -232,6 +243,10 @@ async def run_benchmark(
     evaluator_factory: Callable[[], RagasEvaluator] | None = None,
 ) -> tuple[Path, Path]:
     samples, corpus = load_and_validate_data(config)
+    _log(
+        f"loaded dataset={config.dataset_mode} samples={len(samples)} "
+        f"corpus_chunks={len(corpus)} model={config.model_key} strategy={config.strategy}"
+    )
     identity = _experiment_configuration(config)
     output_jsonl, summary_path = _output_paths(config, identity)
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
@@ -243,10 +258,18 @@ async def run_benchmark(
         output_jsonl.write_text("".join(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n" for row in successful), encoding="utf-8")
     existing = successful
     completed = {str(row["qa_id"]) for row in existing if row.get("qa_id") is not None}
+    _log(
+        f"output={output_jsonl} resume_completed={len(completed)} "
+        f"remaining={len(samples) - len(completed)}"
+    )
 
     dense: DenseRetriever | None = None
     hybrid: HybridRetriever | None = None
     if config.strategy in {"hybrid", "hyde"}:
+        _log(
+            f"retrieval index loading device={config.retrieval_device} "
+            f"embedding_model={config.retrieval_embedding_model}"
+        )
         dense = DenseRetriever.load_or_build(
             chunks=corpus,
             index_dir=config.index_dir,
@@ -255,11 +278,17 @@ async def run_benchmark(
             device=config.retrieval_device,
             batch_size=config.retrieval_batch_size,
         )
+        _log("retrieval index ready")
     if config.strategy == "hybrid":
         hybrid = HybridRetriever(corpus, BM25Retriever(corpus), dense)
+        _log("hybrid retriever ready (BM25 + dense RRF)")
 
     hypothetical_records: dict[str, HypotheticalRecord] = {}
     if config.strategy == "hyde":
+        _log(
+            f"HyDE preparation started provider={config.hyde_provider} "
+            f"model={config.hyde_generator_model}"
+        )
         if hyde_generator_factory is None and config.hyde_provider == "openai":
             hyde_generator_factory = lambda: OpenAIHydeGenerator.from_model(
                 model_id=config.hyde_generator_model,
@@ -279,6 +308,11 @@ async def run_benchmark(
             model_id=config.hyde_generator_model,
             generator_identity=_hyde_identity(config),
             generator_factory=hyde_generator_factory,
+        )
+        cache_hits = sum(1 for record in hypothetical_records.values() if record.cache_hit)
+        _log(
+            f"HyDE preparation finished documents={len(hypothetical_records)} "
+            f"cache_hits={cache_hits} generated={len(hypothetical_records) - cache_hits}"
         )
 
     spec = MODEL_REGISTRY[config.model_key]
@@ -301,13 +335,18 @@ async def run_benchmark(
             concurrency=config.evaluator_concurrency,
         )
     )
+    _log(f"answer model loading model={spec.model_id}")
     answer_generator = answer_generator_factory()
+    _log("answer model ready")
     try:
+        _log(f"evaluator loading model={config.evaluator_model}")
         evaluator = evaluator_factory()
+        _log("evaluator ready")
         with output_jsonl.open("a", encoding="utf-8", newline="\n") as output:
-            for sample in samples:
+            for sample_index, sample in enumerate(samples, start=1):
                 if sample.qa_id in completed:
                     continue
+                _log(f"sample {sample_index}/{len(samples)} qa_id={sample.qa_id} stage=retrieval")
                 row: dict[str, Any] = {
                     "qa_id": sample.qa_id,
                     "dataset_mode": config.dataset_mode,
@@ -332,7 +371,20 @@ async def run_benchmark(
                         hypothetical_text=hypothetical.text if hypothetical else None,
                     )
                     contexts = [item.text for item in retrieved]
-                    answer = answer_generator.answer(sample.question, contexts)
+                    _log(
+                        f"sample {sample_index}/{len(samples)} stage=retrieval_done "
+                        f"chunks={len(contexts)} latency={retrieval_latency:.2f}s"
+                    )
+                    answer = answer_generator.answer(
+                        sample.question,
+                        contexts,
+                        require_retrieved_context=config.strategy != "no_rag",
+                    )
+                    _log(
+                        f"sample {sample_index}/{len(samples)} stage=generation_done "
+                        f"latency={answer.measurement.generation_latency_seconds:.2f}s "
+                        f"output_tokens={answer.measurement.output_tokens}"
+                    )
                     row.update(
                         {
                             "response": answer.text,
@@ -358,6 +410,8 @@ async def run_benchmark(
                                 "hyde_cache_hit": hypothetical.cache_hit,
                             }
                         )
+                    _log(f"sample {sample_index}/{len(samples)} stage=evaluation")
+                    evaluation_started = time.perf_counter()
                     row.update(
                         await evaluator.score(
                             user_input=sample.question,
@@ -367,12 +421,21 @@ async def run_benchmark(
                             include_context_metrics=config.strategy != "no_rag",
                         )
                     )
+                    _log(
+                        f"sample {sample_index}/{len(samples)} stage=evaluation_done "
+                        f"latency={time.perf_counter() - evaluation_started:.2f}s"
+                    )
                 except Exception as exc:
                     row["error"] = f"{type(exc).__name__}: {exc}"
+                    _log(f"sample {sample_index}/{len(samples)} stage=failed error={row['error']}")
                     for metric_name in METRIC_NAMES:
                         row.setdefault(metric_name, None)
                 output.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
                 output.flush()
+                _log(
+                    f"sample {sample_index}/{len(samples)} stage=written "
+                    f"status={'error' if row.get('error') else 'ok'}"
+                )
                 if not row.get("error") and not row.get("metric_errors"):
                     completed.add(sample.qa_id)
     finally:
